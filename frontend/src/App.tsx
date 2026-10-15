@@ -8,7 +8,6 @@ type Feedback = {
   id: number;
   customer: string;
   rating: number;
-  sentiment: Sentiment;
   comment: string;
   date: string;
 };
@@ -16,8 +15,14 @@ type Feedback = {
 type Stats = {
   total_feedback: number;
   average_rating: number;
-  sentiments: Record<Sentiment, number>;
+  rating_distribution: Record<string, number>;
 };
+
+function sentimentFor(rating: number): Sentiment {
+  if (rating >= 4) return "Positive";
+  if (rating === 3) return "Neutral";
+  return "Negative";
+}
 
 const API_URL = "http://127.0.0.1:8000";
 
@@ -72,7 +77,7 @@ function App() {
         item.comment.toLowerCase().includes(query);
 
       const matchesSentiment =
-        sentiment === "All" || item.sentiment === sentiment;
+        sentiment === "All" || sentimentFor(item.rating) === sentiment;
 
       return matchesSearch && matchesSentiment;
     });
@@ -82,6 +87,16 @@ function App() {
     Positive: "positive",
     Neutral: "neutral",
     Negative: "negative",
+  };
+
+  const sentiments: Record<Sentiment, number> = {
+    Positive:
+      (stats?.rating_distribution["4"] ?? 0) +
+      (stats?.rating_distribution["5"] ?? 0),
+    Neutral: stats?.rating_distribution["3"] ?? 0,
+    Negative:
+      (stats?.rating_distribution["1"] ?? 0) +
+      (stats?.rating_distribution["2"] ?? 0),
   };
 
   if (loading) {
@@ -136,7 +151,7 @@ function App() {
           <h2>
             {stats.total_feedback
               ? Math.round(
-                  (stats.sentiments.Positive / stats.total_feedback) * 100
+                  (sentiments.Positive / stats.total_feedback) * 100
                 )
               : 0}%
           </h2>
@@ -152,8 +167,8 @@ function App() {
           </div>
         </div>
 
-        {(Object.keys(stats.sentiments) as Sentiment[]).map((key) => {
-          const count = stats.sentiments[key] ?? 0;
+        {(Object.keys(sentiments) as Sentiment[]).map((key) => {
+          const count = sentiments[key] ?? 0;
           const percentage = stats.total_feedback
             ? (count / stats.total_feedback) * 100
             : 0;
@@ -234,8 +249,10 @@ function App() {
                     </span>
                   </td>
                   <td>
-                    <span className={`badge ${sentimentColors[item.sentiment]}`}>
-                      {item.sentiment}
+                    <span
+                      className={`badge ${sentimentColors[sentimentFor(item.rating)]}`}
+                    >
+                      {sentimentFor(item.rating)}
                     </span>
                   </td>
                   <td className="date-cell">
