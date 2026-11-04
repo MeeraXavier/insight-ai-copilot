@@ -1,6 +1,9 @@
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import "./App.css";
+import { LoadingState } from "./components/LoadingState";
+import { ErrorState } from "./components/ErrorState";
+import { useApi } from "./hooks/useApi";
 
 type Sentiment = "Positive" | "Neutral" | "Negative";
 
@@ -27,48 +30,46 @@ function sentimentFor(rating: number): Sentiment {
 const API_URL = "http://127.0.0.1:8000";
 
 function App() {
-  const [feedback, setFeedback] = useState<Feedback[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
   const [search, setSearch] = useState("");
   const [sentiment, setSentiment] = useState("All");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(10);
+  const [sortColumn, setSortColumn] = useState<keyof Feedback>("date");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
-  useEffect(() => {
-    async function loadDashboard() {
-      try {
-        setLoading(true);
-        setError("");
+  const {
+    data: feedback,
+    loading: feedbackLoading,
+    error: feedbackError,
+    refetch: refetchFeedback,
+  } = useApi<Feedback[]>(async () => {
+    const response = await fetch(`${API_URL}/api/feedback`);
+    if (!response.ok) throw new Error("Failed to fetch feedback data");
+    return response.json();
+  });
 
-        const [feedbackResponse, statsResponse] = await Promise.all([
-          fetch(`${API_URL}/api/feedback`),
-          fetch(`${API_URL}/api/stats`),
-        ]);
+  const {
+    data: stats,
+    loading: statsLoading,
+    error: statsError,
+    refetch: refetchStats,
+  } = useApi<Stats>(async () => {
+    const response = await fetch(`${API_URL}/api/stats`);
+    if (!response.ok) throw new Error("Failed to fetch statistics");
+    return response.json();
+  });
 
-        if (!feedbackResponse.ok || !statsResponse.ok) {
-          throw new Error("The API returned an error.");
-        }
+  const loading = feedbackLoading || statsLoading;
+  const error = feedbackError || statsError;
 
-        const [feedbackData, statsData] = await Promise.all([
-          feedbackResponse.json(),
-          statsResponse.json(),
-        ]);
-
-        setFeedback(feedbackData);
-        setStats(statsData);
-      } catch {
-        setError(
-          "Unable to load dashboard data. Check that the FastAPI backend is running."
-        );
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadDashboard();
-  }, []);
+  const handleRetry = () => {
+    refetchFeedback();
+    refetchStats();
+  };
 
   const filteredFeedback = useMemo(() => {
+    if (!feedback) return [];
+
     const query = search.trim().toLowerCase();
 
     return feedback.filter((item) => {
@@ -82,6 +83,42 @@ function App() {
       return matchesSearch && matchesSentiment;
     });
   }, [feedback, search, sentiment]);
+
+  const sortedFeedback = useMemo(() => {
+    if (!filteredFeedback) return [];
+
+    return [...filteredFeedback].sort((a, b) => {
+      let comparison = 0;
+
+      if (sortColumn === "rating") {
+        comparison = a.rating - b.rating;
+      } else if (sortColumn === "date") {
+        comparison =
+          new Date(a.date).getTime() - new Date(b.date).getTime();
+      } else {
+        comparison = String(a[sortColumn]).localeCompare(String(b[sortColumn]));
+      }
+
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+  }, [filteredFeedback, sortColumn, sortDirection]);
+
+  const paginatedFeedback = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return sortedFeedback.slice(startIndex, startIndex + itemsPerPage);
+  }, [sortedFeedback, currentPage, itemsPerPage]);
+
+  const totalPages = Math.ceil(sortedFeedback.length / itemsPerPage);
+
+  const handleSort = (column: keyof Feedback) => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+    setCurrentPage(1);
+  };
 
   const sentimentColors: Record<Sentiment, string> = {
     Positive: "positive",
@@ -100,18 +137,15 @@ function App() {
   };
 
   if (loading) {
-    return <main className="page"><p>Loading InsightAI...</p></main>;
+    return <LoadingState />;
   }
 
   if (error || !stats) {
     return (
-      <main className="page">
-        <div className="error-box">
-          <h2>Dashboard unavailable</h2>
-          <p>{error || "Statistics could not be loaded."}</p>
-          <button onClick={() => window.location.reload()}>Retry</button>
-        </div>
-      </main>
+      <ErrorState
+        message={error || "Statistics could not be loaded."}
+        onRetry={handleRetry}
+      />
     );
   }
 
@@ -200,7 +234,7 @@ function App() {
             </p>
           </div>
           <span className="result-count">
-            {filteredFeedback.length} results
+            {sortedFeedback.length} results
           </span>
         </div>
 
@@ -231,15 +265,91 @@ function App() {
           <table>
             <thead>
               <tr>
-                <th>Customer</th>
-                <th>Feedback</th>
-                <th>Rating</th>
+                <th>
+                  <button
+                    className="sort-button"
+                    onClick={() => handleSort("customer")}
+                    aria-sort={
+                      sortColumn === "customer"
+                        ? sortDirection === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                  >
+                    Customer
+                    {sortColumn === "customer" && (
+                      <span className="sort-indicator">
+                        {sortDirection === "asc" ? "↑" : "↓"}
+                      </span>
+                    )}
+                  </button>
+                </th>
+                <th>
+                  <button
+                    className="sort-button"
+                    onClick={() => handleSort("comment")}
+                    aria-sort={
+                      sortColumn === "comment"
+                        ? sortDirection === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                  >
+                    Feedback
+                    {sortColumn === "comment" && (
+                      <span className="sort-indicator">
+                        {sortDirection === "asc" ? "↑" : "↓"}
+                      </span>
+                    )}
+                  </button>
+                </th>
+                <th>
+                  <button
+                    className="sort-button"
+                    onClick={() => handleSort("rating")}
+                    aria-sort={
+                      sortColumn === "rating"
+                        ? sortDirection === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                  >
+                    Rating
+                    {sortColumn === "rating" && (
+                      <span className="sort-indicator">
+                        {sortDirection === "asc" ? "↑" : "↓"}
+                      </span>
+                    )}
+                  </button>
+                </th>
                 <th>Sentiment</th>
-                <th>Date</th>
+                <th>
+                  <button
+                    className="sort-button"
+                    onClick={() => handleSort("date")}
+                    aria-sort={
+                      sortColumn === "date"
+                        ? sortDirection === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                  >
+                    Date
+                    {sortColumn === "date" && (
+                      <span className="sort-indicator">
+                        {sortDirection === "asc" ? "↑" : "↓"}
+                      </span>
+                    )}
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody>
-              {filteredFeedback.map((item) => (
+              {paginatedFeedback.map((item) => (
                 <tr key={item.id}>
                   <td className="customer-name">{item.customer}</td>
                   <td className="comment-cell">{item.comment}</td>
@@ -263,7 +373,7 @@ function App() {
                   </td>
                 </tr>
               ))}
-              {filteredFeedback.length === 0 && (
+              {sortedFeedback.length === 0 && (
                 <tr>
                   <td colSpan={5} className="empty-state">
                     No feedback matches your search.
@@ -273,6 +383,28 @@ function App() {
             </tbody>
           </table>
         </div>
+
+        {totalPages > 1 && (
+          <div className="pagination">
+            <button
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              aria-label="Previous page"
+            >
+              Previous
+            </button>
+            <span className="page-info">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              aria-label="Next page"
+            >
+              Next
+            </button>
+          </div>
+        )}
       </section>
 
       <footer>
